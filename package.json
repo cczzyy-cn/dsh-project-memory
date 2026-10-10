@@ -1,6 +1,6 @@
 {
   "name": "dsh-project-memory",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Project memory for DeepSeek Harness: durable, agent-written, repository-scoped memory recalled on demand, plus a global tier for what is true in every repository",
   "type": "module",
   "main": "./lib/index.js",

@@ -66,7 +66,7 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | 工具 | 用途 |
 |---|---|
 | `memory_write` | 写入/更新一条记忆（`id` 复用即更新，`created` 保留） |
-| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文 |
+| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的） |
 | `memory_forget` | 退休一条记忆：正文存入 `archive/`，原笔记就地标记为墓碑（见下） |
 
 四条 `kind` 分类（沿用 Claude Code 验证过的分类学）：
@@ -118,6 +118,7 @@ $DSH_HOME/projects/<project-key>/memory/
 | 会话首次请求 | 注入索引（`source.kind = 'project-memory'`） |
 | 后续步骤 | 索引未变则**不重复注入**（digest 比对） |
 | 记忆被改动后 | 下一步注入更新后的索引 |
+| 索引接近预算（>80%） | 索引里附带 `N/M bytes` 预警，**不必等到写入被拒**才知道该合并 |
 | 没有任何记忆 | **零 token 增量**（直接返回，不产生消息） |
 | 非 git 目录 | 退化为按 cwd 归一 |
 
@@ -141,6 +142,10 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 - **消费语义**：touch 在每次 `pre-step` 被**取用并清空**，因此一次 touch 只影响紧随其后的那一步。
 - **幂等**：每条笔记按内容 digest 记账，同一会话内不重复投递；笔记被修改后 digest 变化，会重新投递。
 - **全局记忆（scope 为空）不参与 L1**——它们已经在常驻索引里，重复投递正文只会浪费上下文。
+- **实测：模型很少主动写 scope。** 用 3 个会话 / 6 条事实测量（提示里完全不提 scope）：
+  改描述前准确率 4/6，改后 5/6，提升**全部来自消除过窄**，路径覆盖始终是 4 条里只有 1 条。
+  所以 L1 是**低频优化，不是承重层**：漏窄无害（全局记忆始终在索引里、可召回），
+  过窄才有害（会在最需要它的地方隐身）。**手写记忆时给 `scope` 才能真正发挥 L1。**
 - **预算**：单次消息受 `scopeMaxBytes` 限制。最具体的笔记是最后放弃的对象：
   装不下时保留标题并**截断正文**（带 `[body truncated…]` 标注），而不是整体丢弃——
   只有比它更宽泛的条目才会被省略并列出。
@@ -209,9 +214,22 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 ## 开发
 
 ```powershell
-node --test test/store.test.mjs   # 70 个用例，纯 Node，无需启动 DSH
+node --test test/host-logic.test.mjs test/store.test.mjs   # 99 个用例，纯 Node，无需启动 DSH
 ```
 
-`lib/store.js` 刻意不 import 任何 harness 包，因此全部核心逻辑（身份、预算、转义、检索、
-作用域选择）都能脱离 DSH 单元测试。`lib/index.js` 只是把它接到
-`ctx.tools.register`、`agent/pre-step` 与 `tools/result` 上。
+测试分成两层，对应两个**刻意不 import 任何 harness 包**的模块：
+
+| 文件 | 覆盖 | 用例 |
+|---|---|---|
+| `lib/store.js` | 身份、预算、转义、检索、作用域选择、存储介质抽象 | 73 |
+| `lib/host-logic.js` | 配置归一、pre-step 门控、touch 归属、作用域候选 | 26 |
+
+`lib/index.js` 只是把它们接到 `ctx.tools.register`、`agent/pre-step`、`tools/result`
+与 `webServer` 上——**它自己不含可测逻辑**。
+
+这样分层有实例为证：我一度在 `index.js` 里加了第二个 `agent/pre-step` 监听器却忘了调
+`next()`，把 waterfall 链吞掉，profile 直接 `exit 1`，而这**只能靠真实启动才发现**。
+决策逻辑挪进 `host-logic.js` 之后，同类问题在单测里就会暴露。
+
+> 完整 E2E 仍然必要：跑一轮 `dsh <profile> "任务"`，再解压 `session.v4.jsonl.zstd`
+> 数注入次数，是唯一能验证"接线正确"的手段。

@@ -845,11 +845,66 @@ describe('actions', () => {
       tags: ['t'],
       created: '2026-10-01T00:00:00.000Z',
       modified: '2026-10-02T00:00:00.000Z',
-      source: 's',
+      source: 'session-abc',
       body: 'body text',
     })
     assert.match(text, /^### x — Title/)
     assert.match(text, /kind: feedback · scope: \(global\) · updated: 2026-10-02 · tags: t/)
+    assert.match(text, /written by: session-abc/, 'a reader can tell where the entry came from')
     assert.match(text, /body text$/)
+  })
+
+  it('omits provenance when there is none to report', () => {
+    const base = {
+      id: 'x', title: 'T', kind: 'project', scope: '', tags: [],
+      created: '', modified: '', body: 'b',
+    }
+    assert.ok(!renderEntry({ ...base, source: 'unknown' }).includes('written by'))
+    assert.ok(!renderEntry({ ...base, source: '' }).includes('written by'))
+    assert.ok(!renderEntry(base).includes('written by'))
+  })
+
+  it('warns before the index is full, not only when a write is refused', () => {
+    const records = Array.from({ length: 6 }, (_, index) => ({
+      id: `note-${index}`,
+      title: `Memory number ${index} with a moderately long title`,
+      kind: 'project',
+      scope: '',
+      tags: [],
+      created: '2026-10-01T00:00:00.000Z',
+      modified: '2026-10-01T00:00:00.000Z',
+      source: 'test',
+      body: 'body',
+    }))
+    const budget = 640
+    const rendered = renderIndex(records, budget)
+    assert.equal(rendered.omitted.length, 0, 'the fixture must fit, so this tests the warning and not the drop')
+    assert.ok(rendered.bytes > budget * 0.8, `fixture must exceed 80% of the budget, got ${rendered.bytes}`)
+
+    const warned = renderInjection(rendered, { budget })
+    assert.match(warned, /nearly full/)
+    assert.match(warned, new RegExp(`${rendered.bytes}/${budget} bytes`))
+
+    const roomy = renderInjection(renderIndex(records.slice(0, 1), budget), { budget })
+    assert.ok(!roomy.includes('nearly full'), 'a roomy index says nothing about budget')
+  })
+
+  it('reports what was dropped when over budget, rather than the near-full hint', () => {
+    const records = Array.from({ length: 30 }, (_, index) => ({
+      id: `note-${index}`,
+      title: `Memory number ${index} with a moderately long title`,
+      kind: 'project',
+      scope: '',
+      tags: [],
+      created: '2026-10-01T00:00:00.000Z',
+      modified: '2026-10-01T00:00:00.000Z',
+      source: 'test',
+      body: 'body',
+    }))
+    const rendered = renderIndex(records, 400)
+    assert.ok(rendered.omitted.length > 0)
+    const text = renderInjection(rendered, { budget: 400 })
+    assert.match(text, /not shown:/)
+    assert.ok(!text.includes('nearly full'), 'the drop notice is the more specific message')
   })
 })

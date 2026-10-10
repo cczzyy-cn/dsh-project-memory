@@ -16,12 +16,13 @@
   "files": [
     "lib/index.js",
     "lib/store.js",
+    "lib/host-logic.js",
     "lib/client.js",
     "cordis.patch.yml",
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/store.test.mjs"
+    "test": "node --test test/host-logic.test.mjs test/store.test.mjs"
   },
   "dsh": {
     "bundle": {

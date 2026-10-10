@@ -14,6 +14,7 @@ import { describe, it } from 'node:test'
 import {
   applyToolResult,
   createTouchState,
+  indexBudgetFor,
   isInjectionStep,
   resolveConfig,
   resolvePanelCwd,
@@ -311,6 +312,21 @@ describe('resolvePanelCwd', () => {
   it('ignores an empty cwd from either source, since it resolves nowhere', () => {
     const choice = resolvePanelCwd({ sessionId: 's1', liveCwd: '', storedCwd: '', recentCwd: REPO, processCwd: PROFILE })
     assert.deepEqual(choice, { cwd: REPO, bound: false, source: 'recent' })
+  })
+})
+
+describe('indexBudgetFor', () => {
+  it('holds each tier to its own index budget', () => {
+    const budgets = { indexMaxBytes: 2048, globalIndexMaxBytes: 1024 }
+    assert.equal(indexBudgetFor({ tier: 'repo', ...budgets }), 2048)
+    assert.equal(indexBudgetFor({ tier: 'global', ...budgets }), 1024)
+  })
+
+  it('treats an unknown or missing tier as the repository, which is the default write', () => {
+    const budgets = { indexMaxBytes: 2048, globalIndexMaxBytes: 1024 }
+    assert.equal(indexBudgetFor({ tier: undefined, ...budgets }), 2048)
+    assert.equal(indexBudgetFor({ tier: 'nonsense', ...budgets }), 2048)
+    assert.equal(indexBudgetFor({ ...budgets }), 2048)
   })
 })
 

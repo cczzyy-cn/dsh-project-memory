@@ -66,7 +66,7 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | 工具 | 用途 |
 |---|---|
 | `memory_write` | 写入/更新一条记忆（`id` 复用即更新，`created` 保留） |
-| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的） |
+| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的）；**无参只给首页**（默认 5 条，`limit` 可调，硬上限 20），完整的清单是注入的那份索引 |
 | `memory_forget` | 退休一条记忆：正文存入 `archive/`，原笔记就地标记为墓碑（见下） |
 
 四条 `kind` 分类（沿用 Claude Code 验证过的分类学）：

@@ -388,6 +388,7 @@ describe('hostile and malformed input on disk', () => {
     assert.equal(await syncIndex(memory.root, nodeIo, LIMITS.indexMaxBytes), false, 'a settled index is left alone')
     const onDisk = await readFile(join(memory.root, 'MEMORY.md'), 'utf8')
     assert.match(onDisk, /hand-made/, 'the human-readable index now matches what is injected')
+    assert.ok(!onDisk.includes('notes/'), 'and it is rendered in the current format, not whatever wrote it last')
   })
 
   it('never resurrects a retired memory, even when the caller held a stale view', async () => {

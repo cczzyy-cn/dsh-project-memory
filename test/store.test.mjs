@@ -24,6 +24,8 @@ import {
   loadRecords,
   loadRecordsDetailed,
   matchesIndexSource,
+  MEMORY_KINDS,
+  MEMORY_TIERS,
   nodeIo,
   normalizeId,
   normalizeKind,
@@ -32,12 +34,14 @@ import {
   noteDigest,
   parseNote,
   projectKey,
+  recallAcrossTiers,
   recallMemory,
   relativeScopePath,
   renderEntry,
   renderIndex,
   renderInjection,
   renderScopeInjectionBudgeted,
+  resolveGlobalMemoryRoot,
   resolveMemoryRoot,
   resolveRepositoryRoot,
   searchRecords,
@@ -906,5 +910,151 @@ describe('actions', () => {
     const text = renderInjection(rendered, { budget: 400 })
     assert.match(text, /not shown:/)
     assert.ok(!text.includes('nearly full'), 'the drop notice is the more specific message')
+  })
+})
+
+describe('global tier', () => {
+  const globalLimits = { ...LIMITS, indexMaxBytes: 1024 }
+
+  it('resolves to one root under the harness home, outside any repository', async () => {
+    const home = await scratch()
+    const memory = resolveGlobalMemoryRoot({ dshHome: home })
+    assert.equal(memory.root, join(home, 'memory'))
+    assert.equal(memory.tier, 'global')
+    assert.equal(memory.storage, 'home', 'never repo: this root lives in no workspace')
+    assert.equal(memory.projectKey, 'global')
+    assert.equal(memory.repositoryRoot, memory.root)
+  })
+
+  it('accepts pitfall as a kind, because a problem and its method are knowledge too', async () => {
+    assert.ok(MEMORY_KINDS.includes('pitfall'))
+    const home = await scratch()
+    const memory = resolveGlobalMemoryRoot({ dshHome: home })
+    await writeMemory(memory, {
+      id: 'rg-hangs-on-pipe',
+      title: 'rg 扫大文件时挂住',
+      kind: 'pitfall',
+      body: '现象：… 方法：… 验证：…',
+    }, globalLimits)
+    const { records } = await loadRecordsDetailed(memory.root)
+    assert.equal(records[0].kind, 'pitfall')
+    assert.match(await recallMemory(memory, { query: '挂住' }, globalLimits), /现象/)
+  })
+
+  it('searches both tiers, repository first, and labels each section', async () => {
+    const home = await scratch()
+    const repo = await resolveMemoryRoot({ dshHome: home, cwd: await fakeRepo() })
+    const global = resolveGlobalMemoryRoot({ dshHome: home })
+    await writeMemory(repo, { id: 'repo-fact', title: 'Repo fact', kind: 'project', body: 'lockfile uses pnpm' }, LIMITS)
+    await writeMemory(global, { id: 'shared-fact', title: 'Shared fact', kind: 'pitfall', body: 'a pipe deadlocks' }, globalLimits)
+
+    const both = await recallAcrossTiers({
+      tiers: [{ tier: 'repo', memory: repo }, { tier: 'global', memory: global }],
+      args: {},
+      limits: LIMITS,
+    })
+    assert.match(both, /## This repository/)
+    assert.match(both, /## Global — true in every repository/)
+    assert.ok(both.indexOf('Repo fact') < both.indexOf('Shared fact'), 'the specific tier is spent first')
+
+    const onlyGlobal = await recallAcrossTiers({ tiers: [{ tier: 'global', memory: global }], args: {}, limits: LIMITS })
+    assert.match(onlyGlobal, /Shared fact/)
+    assert.ok(
+      !onlyGlobal.includes('## This repository') && !onlyGlobal.includes('## Global — true in every repository'),
+      'one tier needs no tier headings',
+    )
+  })
+
+  it('spends the recall budget on the repository tier before the global one', async () => {
+    const home = await scratch()
+    const repo = await resolveMemoryRoot({ dshHome: home, cwd: await fakeRepo() })
+    const global = resolveGlobalMemoryRoot({ dshHome: home })
+    await writeMemory(repo, { id: 'repo-fact', title: 'Repo fact', kind: 'project', body: 'x'.repeat(600) }, LIMITS)
+    await writeMemory(global, { id: 'shared-fact', title: 'Shared fact', kind: 'pitfall', body: 'y'.repeat(600) }, globalLimits)
+
+    const text = await recallAcrossTiers({
+      tiers: [{ tier: 'repo', memory: repo }, { tier: 'global', memory: global }],
+      args: {},
+      limits: { ...LIMITS, recallMaxBytes: 800 },
+    })
+    assert.match(text, /Repo fact/)
+    assert.match(text, /recall budget 800 bytes reached/)
+    assert.match(text, /shared-fact/)
+    assert.ok(!text.includes('Shared fact'), 'global is what gets omitted when the budget runs out')
+  })
+
+  it('says which tier is empty when only one has records', async () => {
+    const home = await scratch()
+    const global = resolveGlobalMemoryRoot({ dshHome: home })
+    assert.match(
+      await recallAcrossTiers({ tiers: [{ tier: 'global', memory: global }], args: {}, limits: LIMITS }),
+      /No global memory has been saved/,
+    )
+    const repo = await resolveMemoryRoot({ dshHome: home, cwd: await fakeRepo() })
+    assert.match(
+      await recallAcrossTiers({ tiers: [{ tier: 'repo', memory: repo }], args: {}, limits: LIMITS }),
+      /No project memory has been saved/,
+    )
+    assert.match(
+      await recallAcrossTiers({
+        tiers: [{ tier: 'repo', memory: repo }, { tier: 'global', memory: global }],
+        args: {},
+        limits: LIMITS,
+      }),
+      /No memory has been saved yet/,
+    )
+  })
+
+  it('lists what exists per tier when nothing matched', async () => {
+    const home = await scratch()
+    const repo = await resolveMemoryRoot({ dshHome: home, cwd: await fakeRepo() })
+    const global = resolveGlobalMemoryRoot({ dshHome: home })
+    await writeMemory(repo, { id: 'repo-fact', title: 'Repo fact', kind: 'project', body: 'a' }, LIMITS)
+    await writeMemory(global, { id: 'shared-fact', title: 'Shared fact', kind: 'pitfall', body: 'b' }, globalLimits)
+    const text = await recallAcrossTiers({
+      tiers: [{ tier: 'repo', memory: repo }, { tier: 'global', memory: global }],
+      args: { query: 'nothing-matches-this' },
+      limits: LIMITS,
+    })
+    assert.match(text, /No memory matched/)
+    assert.match(text, /repo: repo-fact/)
+    assert.match(text, /global: shared-fact/)
+  })
+
+  it('keeps the two tiers apart: an archived global note does not touch the repository', async () => {
+    const home = await scratch()
+    const repo = await resolveMemoryRoot({ dshHome: home, cwd: await fakeRepo() })
+    const global = resolveGlobalMemoryRoot({ dshHome: home })
+    await writeMemory(repo, { id: 'same-id', title: 'Repo one', kind: 'project', body: 'repo body' }, LIMITS)
+    await writeMemory(global, { id: 'same-id', title: 'Global one', kind: 'pitfall', body: 'global body' }, globalLimits)
+
+    await forgetMemory(global, { id: 'same-id', reason: 'stale' }, { ...globalLimits, source: 'test' })
+    const repoRecords = await loadRecords(repo.root)
+    const globalRecords = await loadRecords(global.root)
+    assert.deepEqual(repoRecords.map((record) => record.title), ['Repo one'], 'the repository copy is untouched')
+    assert.deepEqual(globalRecords, [], 'only the global copy was retired')
+  })
+
+  it('renders the global index in the injected message under its own budget', () => {
+    const repo = renderIndex([{
+      id: 'repo-fact', title: 'Repo fact', kind: 'project', scope: '', tags: [],
+      created: '2026-10-01T00:00:00.000Z', modified: '2026-10-01T00:00:00.000Z', source: 'test', body: 'b',
+    }], 2048)
+    const global = renderIndex([{
+      id: 'shared-fact', title: 'Shared fact', kind: 'pitfall', scope: '', tags: [],
+      created: '2026-10-01T00:00:00.000Z', modified: '2026-10-01T00:00:00.000Z', source: 'test', body: 'b',
+    }], 1024)
+    const text = renderInjection(repo, { budget: 2048, globalIndex: global, globalBudget: 1024 })
+    assert.match(text, /Project memory index/)
+    assert.match(text, /Global memory index/)
+    assert.ok(text.indexOf('Project memory index') < text.indexOf('Global memory index'))
+    assert.ok(!text.includes('global budget'), 'a roomy global index says nothing about its budget')
+
+    const tight = renderInjection(repo, { budget: 2048, globalIndex: { ...global, bytes: 900, omitted: [] }, globalBudget: 1024 })
+    assert.match(tight, /global budget 900\/1024 bytes — the global index is nearly full/)
+  })
+
+  it('orders the tiers most specific first, for callers that iterate them', () => {
+    assert.deepEqual(MEMORY_TIERS, ['repo', 'global'])
   })
 })

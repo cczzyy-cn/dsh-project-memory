@@ -19,6 +19,7 @@ import {
   resolvePanelCwd,
   selectScopeCandidates,
   takePendingTouches,
+  targetsOf,
 } from '../lib/host-logic.js'
 import { noteDigest } from '../lib/store.js'
 
@@ -50,6 +51,8 @@ describe('resolveConfig', () => {
     assert.equal(resolved.scopeMaxBytes, 8192)
     assert.equal(resolved.scopeNotesPerStep, 3)
     assert.deepEqual(resolved.projectRootMarkers, ['.git'])
+    assert.equal(resolved.globalEnabled, true)
+    assert.equal(resolved.globalIndexMaxBytes, 1024)
     assert.equal(resolved.dshHome, '/home/dsh')
   })
 
@@ -58,6 +61,11 @@ describe('resolveConfig', () => {
     assert.equal(resolved.enabled, false)
     assert.equal(resolved.storage, 'repo')
     assert.equal(resolved.indexMaxBytes, 512)
+  })
+
+  it('can turn the global tier off, and gives it its own budget', () => {
+    assert.equal(resolveConfig({ globalEnabled: false }, '/home/dsh').globalEnabled, false)
+    assert.equal(resolveConfig({ globalIndexMaxBytes: 2048 }, '/home/dsh').globalIndexMaxBytes, 2048)
   })
 
   it('rejects an unknown storage mode, naming the offending value', () => {
@@ -303,5 +311,28 @@ describe('resolvePanelCwd', () => {
   it('ignores an empty cwd from either source, since it resolves nowhere', () => {
     const choice = resolvePanelCwd({ sessionId: 's1', liveCwd: '', storedCwd: '', recentCwd: REPO, processCwd: PROFILE })
     assert.deepEqual(choice, { cwd: REPO, bound: false, source: 'recent' })
+  })
+})
+
+describe('targetsOf', () => {
+  it('writes to the repository unless global was spelled out', () => {
+    assert.deepEqual(targetsOf(undefined), ['repo'])
+    assert.deepEqual(targetsOf(''), ['repo'])
+    assert.deepEqual(targetsOf('repo'), ['repo'])
+    assert.deepEqual(targetsOf('global'), ['global'])
+    assert.deepEqual(targetsOf('GLOBAL'), ['global'], 'the argument is not case-sensitive')
+  })
+
+  it('refuses "all" for a write, because a write has to land somewhere', () => {
+    assert.deepEqual(targetsOf('all'), ['repo'])
+    assert.deepEqual(targetsOf('all', { fallback: 'global' }), ['global'])
+  })
+
+  it('searches both tiers for recall, and falls back to both on nonsense', () => {
+    assert.deepEqual(targetsOf(undefined, { allowAll: true, fallback: 'all' }), ['repo', 'global'])
+    assert.deepEqual(targetsOf('all', { allowAll: true, fallback: 'all' }), ['repo', 'global'])
+    assert.deepEqual(targetsOf(' nonsense ', { allowAll: true, fallback: 'all' }), ['repo', 'global'])
+    assert.deepEqual(targetsOf('global', { allowAll: true, fallback: 'all' }), ['global'])
+    assert.deepEqual(targetsOf(42, { allowAll: true, fallback: 'all' }), ['repo', 'global'], 'a non-string is not a tier')
   })
 })

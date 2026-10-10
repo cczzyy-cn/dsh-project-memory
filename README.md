@@ -46,6 +46,8 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
     recallLimit: 5
     scopeMaxBytes: 8192
     scopeNotesPerStep: 3
+    globalEnabled: true
+    globalIndexMaxBytes: 1024
     projectRootMarkers: ['.git']
 ```
 
@@ -59,27 +61,56 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | `recallLimit` | `5` | 单次召回条目数上限（硬上限 20） |
 | `scopeMaxBytes` | `8192` | 单次 L1 作用域注入的预算（含约 200 字节框架开销） |
 | `scopeNotesPerStep` | `3` | 单步最多自动加载几条作用域正文 |
+| `globalEnabled` | `true` | 是否启用**全局记忆**层（见下）；关掉后不注入全局索引，工具也不再接受 `target: global` |
+| `globalIndexMaxBytes` | `1024` | 全局索引的**独立**预算；与 `indexMaxBytes` 互不挤占 |
 | `projectRootMarkers` | `['.git']` | 标记项目根的目录项，与 `dsh-agent-instructions` 一致 |
 
 ## 工具
 
 | 工具 | 用途 |
 |---|---|
-| `memory_write` | 写入/更新一条记忆（`id` 复用即更新，`created` 保留） |
-| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的）；**无参只给首页**（默认 5 条，`limit` 可调，硬上限 20），完整的清单是注入的那份索引 |
-| `memory_forget` | 退休一条记忆：正文存入 `archive/`，原笔记就地标记为墓碑（见下） |
+| `memory_write` | 写入/更新一条记忆（`id` 复用即更新，`created` 保留）；`target: "repo"`（默认）或 `"global"` |
+| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的）；`target` 默认 `all`＝**同时搜仓库与全局**；**无参只给首页**（默认 5 条，`limit` 可调，硬上限 20），完整的清单是注入的那份索引 |
+| `memory_forget` | 退休一条记忆：正文存入 `archive/`，原笔记就地标记为墓碑（见下）；`target` 默认 `repo` |
 
-四条 `kind` 分类（沿用 Claude Code 验证过的分类学）：
+五种 `kind` 分类（前四条沿用 Claude Code 验证过的分类学）：
 
 - `user` — 用户是谁、怎么工作
 - `feedback` — 纠正，或确认过的做法
 - `project` — 代码和 git 都推不出的进展、决策、期限
 - `reference` — 外部信息在哪（issue 跟踪器、看板）
+- `pitfall` — **真踩过的坑 + 解决它的方法**，通常配 `target: "global"`；正文按「现象 / 方法 / 验证」三段写
+
+## 全局记忆（agent 级，跨仓库）
+
+有些知识不属于任何一个仓库：一条会把 SSH 挂死的命令形态、一个骗了人一小时的默认值、
+一个权限陷阱。这些放 `repo` 层会在下一个仓库里丢掉，所以有第二层。
+
+| | `repo` 层 | `global` 层 |
+|---|---|---|
+| 位置 | `$DSH_HOME/projects/<key>/memory/` | **`$DSH_HOME/memory/`** |
+| 作用域 | 本仓库（含其 worktree） | **每个仓库** |
+| 写入 | `memory_write` 默认 | `memory_write` + `target: "global"` |
+| 常驻注入 | 索引（`indexMaxBytes`） | 索引（**独立** `globalIndexMaxBytes`，默认 1 KB） |
+| 召回 | `memory_recall` | 同一个工具，默认**两层一起搜**，命中分节显示 |
+
+设计取舍：
+
+- **默认写 `repo`，全局必须显式。** 项目细节不该因为一次顺手而漏进跨仓库记忆；
+  反过来召回默认两层一起搜，因为「这事我是不是在别处踩过」是常态。
+- **全局索引有自己的预算**，不会被仓库索引挤掉，也挤不掉它——两层都是固定成本，
+  而且这一层在**每个项目**里都要付，所以默认只给 1 KB。
+- **全局记忆不参与 L1（按路径自动加载正文）**：作用域是按仓库相对路径算的，
+  对一条跨仓库的知识没有意义。它在索引里、也能被 `memory_recall` 主动读到。
+- **两层可以同名**：`id` 在各自层内唯一，所以 `memory_forget` 要求 `target` 说清退哪一层
+  （只给 id 时先找 `repo`，若全局存在同名会提示改用 `target: "global"`）。
+- **归档一层不影响另一层**：两层各有自己的 `notes/`、`archive/`、`journal/` 与 `MEMORY.md`。
 
 ## 存储布局
 
 ```
-$DSH_HOME/projects/<project-key>/memory/
+$DSH_HOME/projects/<project-key>/memory/     # repo 层：一个仓库一份
+$DSH_HOME/memory/                            # global 层：一份，所有仓库共用
 ├── MEMORY.md          # 索引（派生视图，自动同步）
 ├── notes/
 │   └── <id>.md        # 一条记忆 = 一个文件（真源，可手改、可 diff）
@@ -87,6 +118,8 @@ $DSH_HOME/projects/<project-key>/memory/
 └── journal/
     └── 2026-10.jsonl  # 审计流水，永不注入
 ```
+
+两层的**目录结构完全相同**，只是位置不同；`notes/`、`archive/`、`journal/` 都是各自独立的。
 
 **`project-key`** = `sha1(规范化仓库根路径)` 前 16 位。仓库根按 `.git` 向上查找；
 若 `.git` 是**文件**（linked worktree），会解析其 `gitdir:` 指针回溯到主仓库——
@@ -153,13 +186,15 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 ## 浏览器面板
 
 插件带一个客户端半边：**输入框工具栏的「记忆」按钮**（相机图标与模型选择器之间），
-点开是本仓库的记忆列表，点条目看正文，可直接归档。
+点开是记忆列表——**本仓库的在前、全局的在后，每行带「本仓库 / 全局」标记**，点条目看正文，可直接归档。
 
 - 数据来自宿主半边注册的路由（`ctx.inject(['webServer'], …)`，因此**没有 web 服务器的组合
   自动跳过**，headless/Electron 一切照旧）：
-  - `GET /project-memory/list` — 索引（不含正文）
-  - `GET /project-memory/entry?id=` — 单条完整正文
-  - `POST /project-memory/forget?id=&reason=` — 归档（仅同源，非 POST 一律 405）
+  - `GET /project-memory/list?sessionId=&target=all|repo|global` — 索引（不含正文），`target` 默认 `all`
+  - `GET /project-memory/entry?sessionId=&target=&id=` — 单条完整正文（`target` 说清哪一层）
+  - `POST /project-memory/forget?id=&reason=&target=&sessionId=` — 归档（仅同源，非 POST 一律 405）
+- **归档的绑定规则分两层**：`target: repo` 时面板必须绑定到本会话（否则 **409**，理由见下），
+  而 `target: global` 不需要绑定——全局记忆不属于任何仓库，无从猜错。
 - 客户端是**手写 `react.createElement` 的经典脚本**（`window.__ModuleLoader__.load({ id, factory })`），
   **不需要打包器**，`lib/client.js` 即产物。
 - 面板**按官方浮层打扮**：表面用 `--dsw-menu-surface-fill`（`rgba(248,249,250,.58)`）

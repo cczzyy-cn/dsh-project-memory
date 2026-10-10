@@ -176,6 +176,21 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 - ⚠️ 注入会话 id 时**不要用 `sessionId` 这个 prop 名**——它疑似是 slot 框架的保留名，
   会被覆盖成 `undefined`，于是面板退化成无参请求、宿主回退到无关目录，**显示 0 条**。
   现在用命名空间键 `memorySessionId`（并双读 `sessionId` 兼容）。
+- **面板问的是「本会话的仓库」，所以要能把会话定位到 cwd。** 宿主侧的查找顺序（`resolvePanelCwd`）：
+  1. 本进程里**跑过 step** 的会话 → 记下来的 cwd（`agent/pre-step` 写入的 `cwdBySession`）；
+  2. 没跑过 step 的会话 → 问**会话库**（`ctx.sessionQuery.listSessions()` 里该 id 的 `header.cwd`）；
+  3. 都不行 → 退回「本进程最近见过的 cwd」，并标记 `resolved: false`（**未绑定会话**）；
+  4. 连最近 cwd 都没有 → `process.cwd()`，同样是 `resolved: false`。
+- ⚠️ **重启后立刻打开面板曾经会显示「0 条」并挂着一个陌生 key**：那时 `cwdBySession` 与
+  `mostRecentCwd` 都还是空的，于是掉到第 4 级，把 App 的 profile 目录
+  （`C:\Users\…\.dsh\profiles\desktop`，sha1 前 8 位 `ac75c602`）当成了「本仓库」。
+  现在第 2 级补上了这个洞：只要会话在磁盘上存在就能定位；并且 `resolved: false` 时
+  面板顶部显示「· 未绑定会话」，空列表也改成「面板还没有绑定到本会话…」而不是
+  「这个仓库还没有记忆」。
+- ⚠️ **未绑定时的写操作一律拒绝**：`POST /project-memory/forget` 在 `resolved: false` 时返回
+  **409**，客户端也把「归档这条记忆」按钮置灰——不然一次基于猜测的归档可能退掉**别的仓库**的记忆。
+- `GET /project-memory/list` 返回 `resolved`（是否绑定本会话）、`projectKey`、`repositoryRoot`
+  （真正的仓库根）与 `memoryRoot`（记忆根）。以前 `repositoryRoot` 字段装的是记忆根，字段名是错的。
 - 面板只读 `notes/`，与注入用的是同一份派生物，因此**永远不会显示已被归档的记忆**。
 
 装了新版本后，浏览器里 **`Ctrl+Shift+R` 硬刷新**即可装配新的客户端 bundle。

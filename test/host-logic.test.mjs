@@ -16,6 +16,7 @@ import {
   createTouchState,
   isInjectionStep,
   resolveConfig,
+  resolvePanelCwd,
   selectScopeCandidates,
   takePendingTouches,
 } from '../lib/host-logic.js'
@@ -261,5 +262,46 @@ describe('selectScopeCandidates', () => {
       notesPerStep: 2,
     })
     assert.equal(candidates.length, 6, '2 notes per step leaves room to pick the best 2 of 6')
+  })
+})
+
+describe('resolvePanelCwd', () => {
+  const REPO = 'C:\\Users\\me\\repo'
+  const PROFILE = 'C:\\Users\\me\\.dsh\\profiles\\desktop'
+
+  it('prefers the cwd of a session this process has seen run', () => {
+    const choice = resolvePanelCwd({
+      sessionId: 's1', liveCwd: REPO, storedCwd: 'C:\\stale', recentCwd: 'C:\\other', processCwd: PROFILE,
+    })
+    assert.deepEqual(choice, { cwd: REPO, bound: true, source: 'live' })
+  })
+
+  it('asks the session store for a session that has not run a step yet', () => {
+    // The regression: after a restart the live map is empty, so the panel used to
+    // slide past this session entirely and land on the app's profile directory.
+    const choice = resolvePanelCwd({
+      sessionId: 's1', liveCwd: undefined, storedCwd: REPO, recentCwd: 'C:\\other', processCwd: PROFILE,
+    })
+    assert.deepEqual(choice, { cwd: REPO, bound: true, source: 'store' })
+  })
+
+  it('marks a guess as unbound rather than calling it this repository', () => {
+    const recent = resolvePanelCwd({ sessionId: 'unknown', liveCwd: undefined, storedCwd: undefined, recentCwd: REPO, processCwd: PROFILE })
+    assert.deepEqual(recent, { cwd: REPO, bound: false, source: 'recent' })
+    const none = resolvePanelCwd({ sessionId: 'unknown', liveCwd: undefined, storedCwd: undefined, recentCwd: undefined, processCwd: PROFILE })
+    assert.deepEqual(none, { cwd: PROFILE, bound: false, source: 'process' })
+  })
+
+  it('treats a missing, blank or non-string session id as no session at all', () => {
+    for (const sessionId of [undefined, null, '', '   ', 42, { id: 's1' }]) {
+      const choice = resolvePanelCwd({ sessionId, liveCwd: REPO, storedCwd: REPO, recentCwd: undefined, processCwd: PROFILE })
+      assert.equal(choice.bound, false, `sessionId ${JSON.stringify(sessionId)} must not bind`)
+      assert.equal(choice.cwd, PROFILE)
+    }
+  })
+
+  it('ignores an empty cwd from either source, since it resolves nowhere', () => {
+    const choice = resolvePanelCwd({ sessionId: 's1', liveCwd: '', storedCwd: '', recentCwd: REPO, processCwd: PROFILE })
+    assert.deepEqual(choice, { cwd: REPO, bound: false, source: 'recent' })
   })
 })

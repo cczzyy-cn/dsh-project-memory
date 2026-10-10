@@ -185,8 +185,10 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 「上次我们在做什么」不该靠记性。插件把**本仓库最近的会话**常驻注入（默认 5 条 / 600 字节），
 并提供只读工具 `session_recall`。
 
-- **数据来源是 DSH 自己的 `ctx.sessionQuery`**（base 已挂载 `session-query-sqlite`）。
-  不解析 `.zstd` 日志：那既重复 DSH 的职责，又会随版本化的会话格式（`v0`…`v4`）腐烂。
+- **列表与正文的数据来源是 DSH 自己的 `ctx.sessionQuery`**（base 已挂载 `session-query-sqlite`）。
+  **唯一例外是标题**：快照读不出冷会话的标题时，改从宿主磁盘只读取标题
+  （`<home>/storages/session_projcache/sessions/<id>.json` 的 `title` 行，再退到日志
+  头部帧里的 `session/title` 事件）——见下面「四个实测出来的坑」第 2 条。正文永远只走 `sessionQuery`。
   该服务不在的组合 → 功能自动关闭，其余部分照常工作。
 - **作用域与记忆一致**：按仓库根做前缀匹配，因此 `.../AI` 与 `.../AI/dsh-project-memory`
   是两个独立项目，会话不会互相串。
@@ -194,17 +196,31 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
   不该扩大注入面。正文只在工具调用时按需读取。
 - 工具三种用法：无参数列出最近会话（带 id）／`query` 按标题筛／`id` 读该会话的轮次大纲。
 
-### 三个实测出来的坑（都踩过）
+### 四个实测出来的坑（都踩过）
 
 1. **`listEvents` 不能用来读对话。** 它返回的是 `{ sessionId, seq, type, time, surface }`
    这种**轻量日志索引，不含任何事件正文**。读对话必须用 `readSurface(id)`——它返回的是
    `{ session, inheritedEventCount, capturedThroughSeq, events: [...] }` 这个**对象**，不是数组。
 2. **`readTitleSnapshots` 对持久化会话给不出标题。** 折叠标题来自 `session/title` 事件，
    而读冷会话时不带这些事件——磁盘上明明有标题的会话，折叠结果也是空的。
-   因此插件在标题缺失时**从第一个用户消息派生标签**（这正是 DSH 自己的兜底标题算法）。
+   **实测**：App 重启后同一条 `session_recall` 从「15 条里 12 条有标题」掉到「10 条有标题」，
+   而「10」正是派生标签的上限（下面第 4 条），于是第 11 行往后全成了「（无标题）」。
+   现在标题按**三级兜底**取，前两级都不读整篇日志：
+   1. `readTitleSnapshots` —— 本次 App 运行里热着的会话，最便宜；
+   2. **磁盘**：`<home>/storages/session_projcache/sessions/<id>.json` 的 `record.rows.title.val`
+      （与 GUI 侧栏显示的是同一个折叠值），没有再读日志头部
+      `session.v<N>.jsonl.zstd` 里的 `session/title` 事件。日志是**逐次写入拼接的独立 zstd 帧**，
+      `zstdDecompressSync` 整篇解只出第一帧，所以按魔数切帧逐帧解、取最后一个 title；
+      帧边界可能是压缩载荷里的假魔数，解不开的片段跳过、不作废整次读取。
+      读取只取头部（默认 64 KB）：标题落在前几帧，而单个日志实测 3.3 MB / 2419 帧。
+   3. `labelFromSurface` —— 从第一条用户消息派生标签（DSH 自己的兜底标题算法），
+      代价是整篇 `readSurface`，所以**只对前 `min(limit, 10)` 行**做，是最后手段。
 3. **失败是逐条的，不抛异常。** `readTitleSnapshots` 的条目可能是
    `{ sessionId, status: 'rejected', reason }`。静默跳过会让所有会话显示成"无标题"且毫无线索——
    这个坑我踩了一次，现在拒绝原因会显示在工具输出里。
+4. **上限就是上限：** 派生标签曾经是**唯一**的兜底，而它被 `min(limit, 10)` 卡住，
+   于是一条标题明明在磁盘上的会话（排在列表第 14 位）也会显示成「（无标题）」。
+   现在磁盘兜底**不设行数上限**（一次缓存读很小），派生标签才退回最后手段。
 
 ## 安全
 

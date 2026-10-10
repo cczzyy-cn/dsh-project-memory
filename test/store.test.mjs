@@ -21,6 +21,8 @@ import {
   forgetMemory,
   globToRegExp,
   indexDigest,
+  INDEX_TAGS_MAX,
+  indexLine,
   loadRecords,
   loadRecordsDetailed,
   matchesIndexSource,
@@ -268,6 +270,31 @@ describe('index budget', () => {
     const third = renderIndex(records.slice(1, 4), 2048)
     assert.equal(indexDigest(first), indexDigest(second), 'stable across identical renders')
     assert.notEqual(indexDigest(first), indexDigest(third))
+  })
+
+  it('pays for the id, the title and the kind — and nothing else per line', () => {
+    // Every byte here is re-sent on every step of every session, and the line used
+    // to carry a markdown link (39% of it on a real store) that the model never
+    // follows, plus a date that the panel and `memory_recall` both show.
+    const line = indexLine({
+      id: 'build-uses-pnpm',
+      title: 'Build uses pnpm',
+      kind: 'project',
+      tags: ['build', 'tooling', 'ci', 'extra'],
+      created: '2026-10-01T00:00:00.000Z',
+      modified: '2026-10-02T00:00:00.000Z',
+    })
+    assert.equal(line, '- build-uses-pnpm — Build uses pnpm · project #build #tooling')
+    assert.ok(!line.includes('notes/'), 'no link target the model cannot use')
+    assert.ok(!line.includes('2026-10-02'), 'no date: it is one call away')
+    assert.equal((line.match(/#/g) ?? []).length, INDEX_TAGS_MAX, 'tags are capped, not dropped entirely')
+  })
+
+  it('renders a line whose tags are all there is, without stray separators', () => {
+    assert.equal(
+      indexLine({ id: 'plain', title: 'Plain', kind: 'reference', tags: [] }),
+      '- plain — Plain · reference',
+    )
   })
 })
 
@@ -780,8 +807,8 @@ describe('actions', () => {
   it('refuses a write that would overflow the index, and says how to fix it', async () => {
     const repo = await fakeRepo()
     const memory = await resolveMemoryRoot({ dshHome: home, cwd: repo })
-    // One rendered line is ~65 bytes, so 100 bytes fits exactly one entry.
-    const tight = { ...LIMITS, indexMaxBytes: 100 }
+    // One rendered line is ~40 bytes, so 48 bytes fits exactly one entry.
+    const tight = { ...LIMITS, indexMaxBytes: 48 }
     await writeMemory(memory, { id: 'one', title: 'First memory entry', kind: 'project', body: 'a' }, tight)
     await assert.rejects(
       () => writeMemory(memory, { id: 'two', title: 'Second memory entry', kind: 'project', body: 'b' }, tight),
@@ -880,7 +907,7 @@ describe('actions', () => {
       source: 'test',
       body: 'body',
     }))
-    const budget = 640
+    const budget = 480
     const rendered = renderIndex(records, budget)
     assert.equal(rendered.omitted.length, 0, 'the fixture must fit, so this tests the warning and not the drop')
     assert.ok(rendered.bytes > budget * 0.8, `fixture must exceed 80% of the budget, got ${rendered.bytes}`)

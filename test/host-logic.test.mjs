@@ -9,6 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
 import {
@@ -194,12 +195,16 @@ describe('touch attribution', () => {
 })
 
 describe('selectScopeCandidates', () => {
-  const repositoryRoot = 'C:/repo'
+  // Absolute on the platform running the suite. Hardcoding `C:/repo` failed on
+  // Linux, where it is a relative path and every touch was reported as outside.
+  const repositoryRoot = process.platform === 'win32' ? 'C:\\repo' : '/repo'
+  const repoPath = (...segments) => join(repositoryRoot, ...segments)
+  const outside = process.platform === 'win32' ? 'C:\\elsewhere\\file.ts' : '/elsewhere/file.ts'
 
   it('converts an absolute touch into a repository-relative path and matches', () => {
     const { paths, candidates } = selectScopeCandidates({
       records: [record('api-style', 'src/api/**')],
-      touchedPaths: ['C:\\repo\\src\\api\\route.ts'],
+      touchedPaths: [repoPath('src', 'api', 'route.ts')],
       injected: new Map(),
       repositoryRoot,
     })
@@ -210,7 +215,7 @@ describe('selectScopeCandidates', () => {
   it('ignores touches outside the repository', () => {
     const { paths, candidates } = selectScopeCandidates({
       records: [record('api-style', 'src/api/**')],
-      touchedPaths: ['C:/elsewhere/file.ts'],
+      touchedPaths: [outside],
       injected: new Map(),
       repositoryRoot,
     })
@@ -221,7 +226,7 @@ describe('selectScopeCandidates', () => {
   it('never auto-loads a global note: it is already in the index', () => {
     const { candidates } = selectScopeCandidates({
       records: [record('global-note', ''), record('api-style', 'src/api/**')],
-      touchedPaths: ['C:/repo/src/api/route.ts'],
+      touchedPaths: [repoPath('src', 'api', 'route.ts')],
       injected: new Map(),
       repositoryRoot,
     })
@@ -232,7 +237,7 @@ describe('selectScopeCandidates', () => {
     const already = record('api-style', 'src/api/**')
     const { candidates } = selectScopeCandidates({
       records: [already],
-      touchedPaths: ['C:/repo/src/api/route.ts'],
+      touchedPaths: [repoPath('src', 'api', 'route.ts')],
       injected: new Map([[already.id, noteDigest(already)]]),
       repositoryRoot,
     })
@@ -244,7 +249,7 @@ describe('selectScopeCandidates', () => {
     const after = record('api-style', 'src/api/**', 'new body')
     const { candidates } = selectScopeCandidates({
       records: [after],
-      touchedPaths: ['C:/repo/src/api/route.ts'],
+      touchedPaths: [repoPath('src', 'api', 'route.ts')],
       injected: new Map([[after.id, noteDigest(before)]]),
       repositoryRoot,
     })
@@ -254,7 +259,7 @@ describe('selectScopeCandidates', () => {
   it('does not match a note scoped to an unrelated directory', () => {
     const { candidates } = selectScopeCandidates({
       records: [record('ui-style', 'src/ui/**')],
-      touchedPaths: ['C:/repo/src/api/route.ts'],
+      touchedPaths: [repoPath('src', 'api', 'route.ts')],
       injected: new Map(),
       repositoryRoot,
     })
@@ -265,7 +270,7 @@ describe('selectScopeCandidates', () => {
     const records = Array.from({ length: 20 }, (_, index) => record(`note-${index}`, 'src/**'))
     const { candidates } = selectScopeCandidates({
       records,
-      touchedPaths: ['C:/repo/src/a.ts'],
+      touchedPaths: [repoPath('src', 'a.ts')],
       injected: new Map(),
       repositoryRoot,
       notesPerStep: 2,

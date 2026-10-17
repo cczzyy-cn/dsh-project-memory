@@ -61,6 +61,16 @@ async function scratch() {
   return mkdtemp(join(tmpdir(), 'dsh-mem-test-'))
 }
 
+/**
+ * An absolute repository path for the platform actually running the suite.
+ * Hardcoding `C:\repo` made every POSIX CI run fail: there it is a relative
+ * name containing a colon, not a drive, so `relativeScopePath` correctly
+ * refuses to treat it as the repository root.
+ */
+const NATIVE_REPO = process.platform === 'win32' ? 'C:\\repo' : '/repo'
+const NATIVE_OUTSIDE = process.platform === 'win32' ? 'C:\\elsewhere\\file.ts' : '/elsewhere/file.ts'
+const nativePath = (...segments) => join(NATIVE_REPO, ...segments)
+
 /** Build a fake repository with a `.git` directory. */
 async function fakeRepo(root = undefined) {
   const directory = root ?? await scratch()
@@ -493,19 +503,18 @@ describe('scope-driven loading (L1)', () => {
   }
 
   it('makes an absolute touched path repository-relative', () => {
-    assert.equal(relativeScopePath('C:\\repo', 'C:\\repo\\src\\api\\route.ts'), 'src/api/route.ts')
-    assert.equal(relativeScopePath('/repo', '/repo/src/api/route.ts'), 'src/api/route.ts')
+    assert.equal(relativeScopePath(NATIVE_REPO, nativePath('src', 'api', 'route.ts')), 'src/api/route.ts')
   })
 
   it('resolves a relative touched path against the repository', () => {
-    assert.equal(relativeScopePath('C:\\repo', 'src\\api\\route.ts'), 'src/api/route.ts')
+    assert.equal(relativeScopePath(NATIVE_REPO, join('src', 'api', 'route.ts')), 'src/api/route.ts')
   })
 
   it('reports a path outside the repository as unmatched', () => {
-    assert.equal(relativeScopePath('C:\\repo', 'C:\\elsewhere\\file.ts'), undefined)
-    assert.equal(relativeScopePath('C:\\repo', 'C:\\repo'), undefined)
-    assert.equal(relativeScopePath('C:\\repo', ''), undefined)
-    assert.equal(relativeScopePath('C:\\repo', undefined), undefined)
+    assert.equal(relativeScopePath(NATIVE_REPO, NATIVE_OUTSIDE), undefined)
+    assert.equal(relativeScopePath(NATIVE_REPO, NATIVE_REPO), undefined)
+    assert.equal(relativeScopePath(NATIVE_REPO, ''), undefined)
+    assert.equal(relativeScopePath(NATIVE_REPO, undefined), undefined)
   })
 
   it('selects only scoped notes that cover the touched path', () => {

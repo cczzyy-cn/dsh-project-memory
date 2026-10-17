@@ -36,12 +36,14 @@ import {
   noteDigest,
   parseNote,
   projectKey,
+  queryTerms,
   recallAcrossTiers,
   recallMemory,
   relativeScopePath,
   renderEntry,
   renderIndex,
   renderInjection,
+  renderPreview,
   renderScopeInjectionBudgeted,
   resolveGlobalMemoryRoot,
   resolveMemoryRoot,
@@ -391,6 +393,29 @@ describe('hostile and malformed input on disk', () => {
     assert.ok(!onDisk.includes('notes/'), 'and it is rendered in the current format, not whatever wrote it last')
   })
 
+  it('reuses records the caller already loaded instead of scanning twice', async () => {
+    const repo = await fakeRepo()
+    const memory = await resolveMemoryRoot({ dshHome: home, cwd: repo })
+    await writeMemory(memory, { id: 'loaded', title: 'Loaded', kind: 'project', body: 'b' }, LIMITS)
+    const records = await loadRecords(memory.root)
+    let listings = 0
+    const countingIo = {
+      ...nodeIo,
+      async listNames(directory) {
+        listings += 1
+        return nodeIo.listNames(directory)
+      },
+    }
+    assert.equal(
+      await syncIndex(memory.root, countingIo, LIMITS.indexMaxBytes, records),
+      false,
+      'the index written by the caller is already current',
+    )
+    assert.equal(listings, 0, 'a passed snapshot avoids the second directory scan')
+    assert.equal(await syncIndex(memory.root, countingIo, LIMITS.indexMaxBytes), false)
+    assert.equal(listings, 1, 'without a snapshot the function still loads notes itself')
+  })
+
   it('never resurrects a retired memory, even when the caller held a stale view', async () => {
     const repo = await fakeRepo()
     const memory = await resolveMemoryRoot({ dshHome: home, cwd: repo })
@@ -722,6 +747,12 @@ describe('recall ranking', () => {
     { id: 'api-style', title: 'API style', kind: 'feedback', scope: 'src/api/**', tags: [], created: '', modified: '2026-10-03', source: 't', body: 'wrap errors' },
   ]
 
+  it('splits a query into words and Chinese two-character windows', () => {
+    assert.deepEqual(queryTerms('okx 模拟盘'), ['okx', '模拟', '拟盘'])
+    assert.deepEqual(queryTerms('OKX'), ['okx'])
+    assert.deepEqual(queryTerms(''), [])
+  })
+
   it('ranks an exact id above a substring', () => {
     assert.equal(searchRecords(records, { query: 'why-mongodb' })[0].id, 'why-mongodb')
   })
@@ -729,6 +760,36 @@ describe('recall ranking', () => {
   it('finds by tag and by body', () => {
     assert.equal(searchRecords(records, { query: 'db' })[0].id, 'why-mongodb')
     assert.equal(searchRecords(records, { query: 'lockfile' })[0].id, 'build-uses-pnpm')
+  })
+
+  it('matches every word of a multi-word query, in any order', () => {
+    const multi = [
+      { id: 'okx-demo', title: 'OKX 模拟盘资金', kind: 'project', scope: '', tags: ['okx'], created: '', modified: '2026-10-02', source: 't', body: '虚拟资金只能在模拟交易页面领取' },
+      { id: 'okx-cli', title: 'okx CLI', kind: 'project', scope: '', tags: [], created: '', modified: '2026-10-01', source: 't', body: 'console script 不存在' },
+    ]
+    assert.equal(searchRecords(multi, { query: '模拟盘 okx' })[0].id, 'okx-demo')
+    assert.equal(searchRecords(multi, { query: 'OKX 资金' })[0].id, 'okx-demo', 'word order does not matter')
+  })
+
+  it('matches Chinese without spaces, by overlapping windows', () => {
+    const chinese = [
+      { id: 'demo-funds', title: '模拟盘', kind: 'project', scope: '', tags: [], created: '', modified: '2026-10-02', source: 't', body: '虚拟资金只能进模拟交易页面领取，没有 API' },
+    ]
+    assert.equal(searchRecords(chinese, { query: '模拟交易页面' })[0].id, 'demo-funds')
+    assert.equal(searchRecords(chinese, { query: '不存在的词' }).length, 0)
+  })
+
+  it('ranks full coverage above one strong single-field hit', () => {
+    const candidates = [
+      { id: 'okx', title: 'OKX', kind: 'project', scope: '', tags: [], created: '', modified: '2026-10-01', source: 't', body: 'nothing else' },
+      { id: 'okx-demo-funds', title: 'OKX 模拟盘', kind: 'project', scope: '', tags: ['okx'], created: '', modified: '2026-10-02', source: 't', body: '虚拟资金没有 API' },
+    ]
+    assert.equal(searchRecords(candidates, { query: 'okx 虚拟资金' })[0].id, 'okx-demo-funds')
+  })
+
+  it('reads one known entry by exact id', () => {
+    assert.deepEqual(searchRecords(records, { id: 'api-style' }).map((record) => record.id), ['api-style'])
+    assert.equal(searchRecords(records, { id: 'nope' }).length, 0)
   })
 
   it('filters by kind', () => {
@@ -857,6 +918,41 @@ describe('actions', () => {
     const result = await recallMemory(memory, {}, { ...LIMITS, recallMaxBytes: 2000, recallLimit: 10 })
     assert.ok(byteLength(result) < 2600, `recall stayed bounded, got ${byteLength(result)}`)
     assert.match(result, /recall budget/)
+  })
+
+  it('returns snippets instead of whole bodies when preview is asked for', async () => {
+    const repo = await fakeRepo()
+    const memory = await resolveMemoryRoot({ dshHome: home, cwd: repo })
+    await writeMemory(memory, {
+      id: 'long',
+      title: 'A long memory',
+      kind: 'project',
+      body: `intro ${'z'.repeat(2000)} needle at the end`,
+    }, LIMITS)
+    const result = await recallMemory(memory, { query: 'needle', preview: true }, LIMITS)
+    assert.match(result, /\[preview: \d+ bytes total/)
+    assert.match(result, /needle/, 'the matched passage is kept')
+    assert.ok(!result.includes('z'.repeat(2000)), 'the body is not sent whole')
+  })
+
+  it('centres a preview on the first matching term', () => {
+    const record = {
+      id: 'x',
+      title: 'Title',
+      kind: 'project',
+      scope: '',
+      tags: [],
+      created: '',
+      modified: '2026-10-02',
+      source: 't',
+      body: `${'a'.repeat(500)} needle ${'b'.repeat(500)}`,
+    }
+    const text = renderPreview(record, ['needle'], { maxChars: 120, contextChars: 40 })
+    assert.match(text, /^### x — Title/)
+    assert.match(text, /…/, 'a clipped snippet is marked')
+    assert.match(text, /needle/)
+    assert.match(text, /memory_recall \{"id":"x"\}/)
+    assert.ok(byteLength(text) < byteLength(record.body), 'a preview is smaller than the body it summarises')
   })
 
   it('keeps an audit journal', async () => {

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # The suite is plain `node --test` and imports no harness packages, so it
+      # runs without installing anything.
+      - run: npm test
+
+  compatibility:
+    name: DSH compatibility
+    runs-on: ubuntu-latest
+    env:
+      # Bump together with the DSH runtime this release should load on. The
+      # plugin's engines.dsh is checked against exactly this version using the
+      # same evaluator DSH runs at boot.
+      DSH_VERSION: 0.2.1-rc.2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # tools/compat is its own package on purpose: the repository root declares
+      # DSH packages as host-supplied peers, and npm would try to install them
+      # there and then disagree with app-boot's exact requirement.
+      - run: npm --prefix tools/compat install --no-package-lock --no-save @deepseek-ai/dsh-app-boot@$DSH_VERSION
+      - run: node tools/compat/check.mjs

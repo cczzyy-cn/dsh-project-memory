@@ -1,0 +1,9 @@
+{
+  "name": "dsh-project-memory-compat-check",
+  "private": true,
+  "description": "Runs DSH's own plugin-compatibility evaluator against this plugin's manifest",
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/dsh-app-boot": "0.2.1-rc.2"
+  }
+}

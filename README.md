@@ -30,9 +30,11 @@ npx -y @deepseek-ai/dsh plugin --profile desktop add link:C:/path/to/dsh-project
 npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-project-memory" 配置层
 ```
 
-兼容性：插件面向 DSH **0.2.x**（peer 范围 `>=0.2.0-rc.2 <0.3.0`）。DSH 启动时会把
-`peerDependencies` 里每个 `@deepseek-ai/dsh-*` 的范围与运行时版本逐一比对，任一不满足就
-跳过整个 bundle；因此不要把范围写成精确的 `0.2.0-rc.2` —— 0.2.1-rc.2 会直接拒绝加载。
+兼容性：插件面向 DSH **0.2.x**，权威声明是 `engines.dsh: ">=0.2.0-rc.2 <0.3.0-0"`
+（`<0.3.0-0` 而不是 `<0.3.0`，是为了把 0.3 的预发布版也挡在外面）。DSH 启动时检查这个范围；
+没有 `engines.dsh` 时才会逐一比对 `peerDependencies` 里的 `@deepseek-ai/dsh-*`。任一不满足就
+跳过整个 bundle，所以别把范围写成精确的 `0.2.0-rc.2`。CI 的 `compatibility` job 用 DSH
+自己的评估器（`tools/compat/check.mjs`）守住这条声明。
 
 ## 配置
 
@@ -74,8 +76,12 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | 工具 | 用途 |
 |---|---|
 | `memory_write` | 写入/更新一条记忆（`id` 复用即更新，`created` 保留）；`target: "repo"`（默认）或 `"global"` |
-| `memory_recall` | 按 id / 标签 / 正文子串召回完整正文，输出带**出处**（哪个会话写入的）；`target` 默认 `all`＝**同时搜仓库与全局**；**无参只给首页**（默认 5 条，`limit` 可调，硬上限 20），完整的清单是注入的那份索引 |
+| `memory_recall` | 按词召回正文：查询按空白/标点拆词，中文按 2 字窗口匹配，按“命中词数 + 字段权重”排序；`id` 精确取一条；`preview: true` 只回命中片段；输出带**出处**（哪个会话写入的）；`target` 默认 `all`＝**同时搜仓库与全局**；**无参只给首页**（默认 5 条，`limit` 可调，硬上限 20），完整的清单是注入的那份索引 |
 | `memory_forget` | 退休一条记忆：正文存入 `archive/`，原笔记就地标记为墓碑（见下）；`target` 默认 `repo` |
+
+检索不是整串子串：`okx 模拟盘` 会拆成 `okx` / `模拟` / `拟盘` 三个词，命中的词越多排序越靠前，
+id 与标签的命中权重高于标题，标题又高于正文。所以不需要背下原句；中文没有空格也能搜。
+`preview: true` 每条只回约 300 字符的命中片段，适合先看几条再决定读哪条全文。
 
 五种 `kind` 分类（前四条沿用 Claude Code 验证过的分类学）：
 
@@ -329,15 +335,30 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 ## 开发
 
 ```powershell
-node --test test/host-logic.test.mjs test/store.test.mjs   # 99 个用例，纯 Node，无需启动 DSH
+node --test test/host-logic.test.mjs test/store.test.mjs test/sessions.test.mjs
+# 185 个用例，纯 Node，无需安装依赖，也无需启动 DSH
 ```
 
-测试分成两层，对应两个**刻意不 import 任何 harness 包**的模块：
+CI（`.github/workflows/ci.yml`）跑两件事：
+
+- `test` job：Node 20 / 22 / 24 各跑一遍上面的用例（不需要 `npm install`）；
+- `compatibility` job：用 DSH **自己的评估器**检查这份 `package.json`。`tools/compat/`
+  是一个独立的小包，只装 `@deepseek-ai/dsh-app-boot`——DSH 正是从它读运行时版本——
+  然后调用 `evaluatePluginCompatibility` 断言通过。本地复现：
+
+```powershell
+npm --prefix tools/compat install --no-package-lock
+node tools/compat/check.mjs             # 检查 tools/compat 里装的那个 DSH 版本
+node tools/compat/check.mjs 0.3.0-rc.1  # 越界的版本应以 1 退出
+```
+
+测试分成三层，对应三个**刻意不 import 任何 harness 包**的模块：
 
 | 文件 | 覆盖 | 用例 |
 |---|---|---|
-| `lib/store.js` | 身份、预算、转义、检索、作用域选择、存储介质抽象 | 73 |
-| `lib/host-logic.js` | 配置归一、pre-step 门控、touch 归属、作用域候选 | 26 |
+| `lib/store.js` | 身份、预算、转义、检索、作用域选择、存储介质抽象 | 92 |
+| `lib/host-logic.js` | 配置归一、pre-step 门控、touch 归属、作用域候选 | 37 |
+| `lib/sessions.js` | 会话回忆、标题三级兜底、zstd 分帧、仓库前缀匹配 | 56 |
 
 `lib/index.js` 只是把它们接到 `ctx.tools.register`、`agent/pre-step`、`tools/result`
 与 `webServer` 上——**它自己不含可测逻辑**。

@@ -60,7 +60,8 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `enabled` | `true` | 关掉后插件不注册工具也不注入 |
-| `storage` | `home` | `home` = `$DSH_HOME`（机器本地、不进仓库）；`repo` = `<仓库>/.dsh/memory`（可进版本控制共享） |
+| `storage` | `home` | `home` = `$DSH_HOME`（机器本地、不进仓库）；`repo` = `<项目根>/.dsh/memory`（可进版本控制共享） |
+| `identity` | `repository` | `repository` = 以最近的 git 仓库根为项目（子目录、worktree 共享）；`directory` = 以**精确工作区目录**为项目（不向上找 `.git`） |
 | `indexMaxBytes` | `2048` | **常驻上下文**的索引预算；写满时 `memory_write` 会报错要求合并或遗忘 |
 | `noteMaxBytes` | `4096` | 单条记忆正文上限 |
 | `recallMaxBytes` | `4096` | 单次 `memory_recall` 返回上限 |
@@ -69,7 +70,37 @@ npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-
 | `scopeNotesPerStep` | `3` | 单步最多自动加载几条作用域正文 |
 | `globalEnabled` | `true` | 是否启用**全局记忆**层（见下）；关掉后不注入全局索引，工具也不再接受 `target: global` |
 | `globalIndexMaxBytes` | `1024` | 全局索引的**独立**预算；与 `indexMaxBytes` 互不挤占 |
-| `projectRootMarkers` | `['.git']` | 标记项目根的目录项，与 `dsh-agent-instructions` 一致 |
+| `projectRootMarkers` | `['.git']` | 标记项目根的目录项，与 `dsh-agent-instructions` 一致；只在 `identity: repository` 下生效 |
+
+### 项目身份：仓库 or 目录
+
+`identity` 决定“什么算同一个项目”，也就决定记忆存在哪个 key 下：
+
+| | `repository`（默认） | `directory` |
+|---|---|---|
+| 项目边界 | 最近的 `.git` 祖先 | 会话的**精确 cwd** |
+| 同一仓库的子目录 | 共享 | 各自独立 |
+| 链接 worktree | 与主仓库共享 | 各自独立 |
+| 非仓库父目录与其子仓库 | 分开（父目录自己一份） | 分开 |
+| 作用域 `scope` 相对谁 | 仓库根 | 工作区目录 |
+| 会话回忆匹配 | 前缀（子目录会话算本仓库） | 精确相等 |
+
+要严格按工作区目录区分，在 profile 的 patch 里写：
+
+```yaml
+- id: project-memory
+  name: dsh-project-memory
+  config:
+    identity: directory
+```
+
+注意三点：
+
+1. **切换 identity 不会迁移旧记忆**：key 变了，旧 store 还在磁盘上，但新会话看不到它。
+   需要迁移就把旧 store 的 `notes/` 复制到新 key 的目录（`$DSH_HOME/projects/<新key>/memory/notes/`）。
+2. **身份取的是会话创建时的 cwd**（`session.header.cwd`）。会话里用 `working_directory`
+   工具切到别的目录，记忆归属不会跟着变——这正好是“严格按工作区”的语义。
+3. `storage: repo` 的位置也随身份走：`directory` 模式下是 `<工作区>/.dsh/memory`。
 
 ## 工具
 
@@ -269,8 +300,9 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
   （`<home>/storages/session_projcache/sessions/<id>.json` 的 `title` 行，再退到日志
   头部帧里的 `session/title` 事件）——见下面「四个实测出来的坑」第 2 条。正文永远只走 `sessionQuery`。
   该服务不在的组合 → 功能自动关闭，其余部分照常工作。
-- **作用域与记忆一致**：按仓库根做前缀匹配，因此 `.../AI` 与 `.../AI/dsh-project-memory`
-  是两个独立项目，会话不会互相串。
+- **作用域与记忆一致**：`identity: repository` 时按仓库根做前缀匹配（子目录会话算本仓库）；
+  `identity: directory` 时只匹配**完全相同**的工作区目录。注意默认模式下非仓库父目录会
+  单向包含子仓库的会话（因为前缀匹配），严格隔离请用 `directory`。
 - **只注入标题与日期，绝不注入正文**：会话正文里是工具输出与网页内容等不可信材料，
   不该扩大注入面。正文只在工具调用时按需读取。
 - 工具三种用法：无参数列出最近会话（带 id）／`query` 按标题筛／`id` 读该会话的轮次大纲。
@@ -336,7 +368,7 @@ step 3  read src/api/route.ts 再次      ← touch 相同，digest 已记 → �
 
 ```powershell
 node --test test/host-logic.test.mjs test/store.test.mjs test/sessions.test.mjs
-# 185 个用例，纯 Node，无需安装依赖，也无需启动 DSH
+# 194 个用例，纯 Node，无需安装依赖，也无需启动 DSH
 ```
 
 CI（`.github/workflows/ci.yml`）跑两件事：
@@ -356,9 +388,9 @@ node tools/compat/check.mjs 0.3.0-rc.1  # 越界的版本应以 1 退出
 
 | 文件 | 覆盖 | 用例 |
 |---|---|---|
-| `lib/store.js` | 身份、预算、转义、检索、作用域选择、存储介质抽象 | 92 |
-| `lib/host-logic.js` | 配置归一、pre-step 门控、touch 归属、作用域候选 | 37 |
-| `lib/sessions.js` | 会话回忆、标题三级兜底、zstd 分帧、仓库前缀匹配 | 56 |
+| `lib/store.js` | 身份、预算、转义、检索、作用域选择、存储介质抽象 | 97 |
+| `lib/host-logic.js` | 配置归一、pre-step 门控、touch 归属、作用域候选 | 39 |
+| `lib/sessions.js` | 会话回忆、标题三级兜底、zstd 分帧、仓库/目录边界 | 58 |
 
 `lib/index.js` 只是把它们接到 `ctx.tools.register`、`agent/pre-step`、`tools/result`
 与 `webServer` 上——**它自己不含可测逻辑**。

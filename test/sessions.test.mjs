@@ -73,6 +73,13 @@ describe('withinRepository', () => {
     assert.equal(withinRepository(REPO, ''), false)
     assert.equal(withinRepository(REPO, '   '), false)
   })
+
+  it('accepts only the same directory when exact is asked for', () => {
+    assert.equal(withinRepository(REPO, REPO, { exact: true }), true)
+    assert.equal(withinRepository(REPO, 'C:\\Users\\me\\repo\\', { exact: true }), true)
+    assert.equal(withinRepository(REPO, 'C:\\Users\\me\\repo\\packages\\app', { exact: true }), false)
+    assert.equal(withinRepository(REPO, 'C:\\Users\\me\\repo-other', { exact: true }), false)
+  })
 })
 
 describe('titleTextOf', () => {
@@ -111,6 +118,11 @@ describe('selectRecentSessions', () => {
       sessions, titleSnapshots: titles, repositoryRoot: REPO, excludeSessionId: 's-new',
     })
     assert.deepEqual(picked.map((entry) => entry.id), ['s-mid', 's-old'])
+  })
+
+  it('excludes subdirectory sessions when exact is asked for', () => {
+    const picked = selectRecentSessions({ sessions, titleSnapshots: titles, repositoryRoot: REPO, exact: true })
+    assert.deepEqual(picked.map((entry) => entry.id), ['s-new', 's-old'])
   })
 
   it('honours the limit', () => {

@@ -46,6 +46,7 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig({}, '/home/dsh')
     assert.equal(resolved.enabled, true)
     assert.equal(resolved.storage, 'home')
+    assert.equal(resolved.identity, 'repository')
     assert.equal(resolved.indexMaxBytes, 2048)
     assert.equal(resolved.noteMaxBytes, 4096)
     assert.equal(resolved.recallMaxBytes, 4096)
@@ -74,6 +75,18 @@ describe('resolveConfig', () => {
     assert.throws(
       () => resolveConfig({ storage: 'cloud' }, '/home/dsh'),
       /storage must be "home" or "repo", got "cloud"/,
+    )
+  })
+
+  it('accepts a directory identity, in any casing', () => {
+    assert.equal(resolveConfig({ identity: 'directory' }, '/home/dsh').identity, 'directory')
+    assert.equal(resolveConfig({ identity: '  DIRECTORY ' }, '/home/dsh').identity, 'directory')
+  })
+
+  it('rejects an unknown identity, naming the offending value', () => {
+    assert.throws(
+      () => resolveConfig({ identity: 'workspace' }, '/home/dsh'),
+      /identity must be "repository" or "directory", got "workspace"/,
     )
   })
 

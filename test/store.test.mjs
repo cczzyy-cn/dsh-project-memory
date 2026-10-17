@@ -163,6 +163,61 @@ describe('project identity', () => {
   })
 })
 
+describe('directory identity', () => {
+  it('keys the workspace itself, not the repository above it', async () => {
+    const home = await scratch()
+    const repo = await fakeRepo()
+    const sub = join(repo, 'packages', 'app')
+    await mkdir(sub, { recursive: true })
+    const atRoot = await resolveMemoryRoot({ dshHome: home, cwd: repo, identity: 'directory' })
+    const atSub = await resolveMemoryRoot({ dshHome: home, cwd: sub, identity: 'directory' })
+    assert.equal(atRoot.identityMode, 'directory')
+    assert.notEqual(atRoot.projectKey, atSub.projectKey, 'a subdirectory is a different workspace')
+    assert.notEqual(atRoot.root, atSub.root)
+    assert.equal(atSub.repositoryRoot, sub, 'scopes are relative to the workspace')
+  })
+
+  it('does not treat a linked worktree as the main repository', async () => {
+    const main = await fakeRepo()
+    const worktree = await scratch()
+    await writeFile(join(worktree, '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'feature')}\n`)
+    const home = await scratch()
+    const fromWorktree = await resolveMemoryRoot({ dshHome: home, cwd: worktree, identity: 'directory' })
+    const fromMain = await resolveMemoryRoot({ dshHome: home, cwd: main, identity: 'directory' })
+    assert.equal(fromWorktree.repositoryRoot, worktree)
+    assert.notEqual(fromWorktree.projectKey, fromMain.projectKey)
+  })
+
+  it('keeps the repository identity when identity is omitted or repository', async () => {
+    const home = await scratch()
+    const repo = await fakeRepo()
+    const deep = join(repo, 'src')
+    await mkdir(deep, { recursive: true })
+    const implicit = await resolveMemoryRoot({ dshHome: home, cwd: deep })
+    const explicit = await resolveMemoryRoot({ dshHome: home, cwd: repo, identity: 'repository' })
+    assert.equal(implicit.identityMode, 'repository')
+    assert.equal(implicit.projectKey, explicit.projectKey)
+    assert.equal(implicit.root, explicit.root)
+  })
+
+  it('records the mode in the identity string, so switching starts a new baseline', async () => {
+    const home = await scratch()
+    const repo = await fakeRepo()
+    const byRepo = await resolveMemoryRoot({ dshHome: home, cwd: repo })
+    const byDirectory = await resolveMemoryRoot({ dshHome: home, cwd: repo, identity: 'directory' })
+    assert.notEqual(byRepo.identity, byDirectory.identity)
+  })
+
+  it('places repo storage inside the workspace directory', async () => {
+    const home = await scratch()
+    const repo = await fakeRepo()
+    const sub = join(repo, 'pkg')
+    await mkdir(sub, { recursive: true })
+    const memory = await resolveMemoryRoot({ dshHome: home, cwd: sub, storage: 'repo', identity: 'directory' })
+    assert.equal(memory.root, join(sub, '.dsh', 'memory'))
+  })
+})
+
 describe('validation', () => {
   it('accepts kebab-case ids and rejects everything else', () => {
     assert.equal(normalizeId('Build-Uses-Pnpm'), 'build-uses-pnpm')

@@ -30,6 +30,10 @@ npx -y @deepseek-ai/dsh plugin --profile desktop add link:C:/path/to/dsh-project
 npx -y @deepseek-ai/dsh --profile desktop --dump-config   # 应出现 "# == dsh-project-memory" 配置层
 ```
 
+兼容性：插件面向 DSH **0.2.x**（peer 范围 `>=0.2.0-rc.2 <0.3.0`）。DSH 启动时会把
+`peerDependencies` 里每个 `@deepseek-ai/dsh-*` 的范围与运行时版本逐一比对，任一不满足就
+跳过整个 bundle；因此不要把范围写成精确的 `0.2.0-rc.2` —— 0.2.1-rc.2 会直接拒绝加载。
+
 ## 配置
 
 写在 profile 的 `cordis.patch.yml`。注意 **patch 条目会替换目标的整个配置**，要重述想保留的每个值：

@@ -1,6 +1,6 @@
 {
   "name": "dsh-project-memory",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Project memory for DeepSeek Harness: durable, agent-written, repository-scoped memory recalled on demand, plus a global tier for what is true in every repository",
   "type": "module",
   "main": "./lib/index.js",
@@ -39,10 +39,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-home-paths": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.0-rc.2 <0.3.0",
     "@deepseek-ai/schemastery": "~3.18.4"
   },
   "engines": {

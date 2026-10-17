@@ -341,7 +341,7 @@ node --test test/host-logic.test.mjs test/store.test.mjs test/sessions.test.mjs
 
 CI（`.github/workflows/ci.yml`）跑两件事：
 
-- `test` job：Node 20 / 22 / 24 各跑一遍上面的用例（不需要 `npm install`）；
+- `test` job：Ubuntu 上 Node 20 / 22 / 24、Windows 上 Node 24 各跑一遍（不需要 `npm install`）；
 - `compatibility` job：用 DSH **自己的评估器**检查这份 `package.json`。`tools/compat/`
   是一个独立的小包，只装 `@deepseek-ai/dsh-app-boot`——DSH 正是从它读运行时版本——
   然后调用 `evaluatePluginCompatibility` 断言通过。本地复现：
